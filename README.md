@@ -280,3 +280,14 @@ microservices_notification_service  | [Notification Service DLQ] Message routed 
 - **Graceful Shutdown Hooks**: Each microservice handles `SIGINT`/`SIGTERM` to safely drain NATS connections and database pools without dropping in-flight requests.
 - **Decoupled Layers**: Built with strict separation of concerns (`controllers/`, `services/`, `repositories/`, `events/`, `config/`, `middlewares/`).
 - **Secret Hygiene**: All environment variables use strictly configured `.env` files with sample fallback definitions.
+
+---
+
+## 🛠 Troubleshooting
+
+- **Port Conflicts**: Ensure ports `3000`, `4001`, `4002`, `5432`, `4222`, and `8222` are not occupied by other standalone processes (`npm run dev`) on your machine before running `docker-compose up`.
+- **Database & Volume Reset**: To wipe persistent database/NATS data and start fresh with a clean state:
+  ```bash
+  docker-compose down -v
+  docker-compose up --build
+  ```
