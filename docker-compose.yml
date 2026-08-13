@@ -1,0 +1,146 @@
+services:
+  # ---------------------------------------------------------------------------
+  # Message Broker: NATS Server with JetStream enabled
+  # ---------------------------------------------------------------------------
+  nats:
+    image: nats:latest
+    container_name: microservices_nats
+    command: ["-js", "-sd", "/data"]
+    ports:
+      - "4222:4222"   # Client port
+      - "8222:8222"   # HTTP Monitoring port
+    volumes:
+      - nats_data:/data
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD", "nats-server", "-sl"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # Database: PostgreSQL Instance
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: microservices_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: userdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d userdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # User Service: Node.js (TypeScript) + Prisma + PostgreSQL + NATS JetStream Publisher
+  # ---------------------------------------------------------------------------
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: microservices_user_service
+    environment:
+      PORT: 4001
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:postgrespassword@postgres:5432/userdb?schema=public
+      NATS_URL: nats://nats:4222
+      JWT_SECRET: 3460fcc98375556838aea9125df6bc3c
+      INTERNAL_API_SECRET: super-secret-internal-gateway-token
+      BCRYPT_SALT_ROUNDS: 12
+      CORS_ORIGIN: "*"
+    ports:
+      - "4001:4001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Notification Service: Node.js (TypeScript) + NATS JetStream Durable Consumer & DLQ
+  # ---------------------------------------------------------------------------
+  notification-service:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile
+    container_name: microservices_notification_service
+    environment:
+      PORT: 4002
+      NODE_ENV: production
+      NATS_URL: nats://nats:4222
+      MAX_RETRIES: 3
+      CORS_ORIGIN: "*"
+    ports:
+      - "4002:4002"
+    depends_on:
+      nats:
+        condition: service_healthy
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4002/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # API Gateway: Node.js (TypeScript) + Express (Rate Limiting, Auth, Validation, Proxy)
+  # ---------------------------------------------------------------------------
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: microservices_api_gateway
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      USER_SERVICE_URL: http://user-service:4001
+      JWT_SECRET: super-secret-jwt-key-production-change-me
+      RATE_LIMIT_WINDOW_MS: 900000
+      RATE_LIMIT_MAX_REQUESTS: 100
+      INTERNAL_API_SECRET: super-secret-internal-gateway-token
+      CORS_ORIGIN: "*"
+      AUTH_RATE_LIMIT_WINDOW_MS: 900000
+      AUTH_RATE_LIMIT_MAX_REQUESTS: 5
+
+    ports:
+      - "3000:3000"
+    depends_on:
+      user-service:
+        condition: service_healthy
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  backend-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  nats_data:
